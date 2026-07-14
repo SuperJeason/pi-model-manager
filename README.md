@@ -43,7 +43,7 @@ Reads `models.json`, matches each custom model **by id** against models.dev firs
 - `thinkingLevelMap` (from models.dev `reasoning_options` when available; enables `max` / `xhigh` thinking levels)
 - `cost` (from models.dev `api.json` pricing → pi `{input,output,cacheRead,cacheWrite[,tiers]}` USD/1M; fills missing or all-zero placeholders)
 - `compat` (from built-in pi metadata; merged, your values win)
-- `maxTokens`, `contextWindow`, `reasoning`, `input`, `name`
+- `maxTokens`, `contextWindow`, `reasoning`, `input` (only `text`/`image`; pdf/audio/video from models.dev are stripped), `name`
 
 Only fills **missing** fields — anything set explicitly is preserved. Idempotent.
 

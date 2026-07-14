@@ -34,6 +34,10 @@ export interface ModelCost extends ModelCostRates {
   tiers?: ModelCostTier[];
 }
 
+/** pi only validates these input modalities (see pi-ai Model.input). */
+export const PI_INPUT_MODALITIES = ["text", "image"] as const;
+export type PiInputModality = (typeof PI_INPUT_MODALITIES)[number];
+
 export interface LikeModel {
   id: string;
   provider?: string;
@@ -43,7 +47,8 @@ export interface LikeModel {
   compat?: Record<string, unknown>;
   maxTokens?: number;
   contextWindow?: number;
-  input?: string[];
+  /** pi-ai only accepts "text" | "image". */
+  input?: PiInputModality[];
   /** USD / 1M tokens (pi usage accounting). */
   cost?: ModelCost;
   /** Optional explicit family override, e.g. "openai" / "xai" / "zhipuai". */
@@ -512,6 +517,28 @@ function optionsToThinkingLevelMap(options: ModelsDevReasoningOption[] | undefin
   return mapEffortValuesToThinkingLevelMap(effort.values);
 }
 
+/**
+ * pi-ai Model.input is typed as ("text" | "image")[].
+ * models.dev modalities often include pdf/audio/video — drop unsupported values
+ * so models.json validation does not fail.
+ */
+export function sanitizePiInputModalities(raw: unknown): PiInputModality[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const allowed = new Set<string>(PI_INPUT_MODALITIES);
+  const out: PiInputModality[] = [];
+  const seen = new Set<string>();
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const n = v.trim().toLowerCase();
+    if (!allowed.has(n) || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n as PiInputModality);
+  }
+  // Prefer at least text when source listed inputs but none survived filtering.
+  if (out.length === 0 && raw.length > 0) return ["text"];
+  return out.length > 0 ? out : undefined;
+}
+
 function numOr(v: unknown, fallback = 0): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
@@ -665,7 +692,9 @@ function rawToLikeModel(
   if (thinkingLevelMap) model.thinkingLevelMap = thinkingLevelMap;
   if (typeof raw.limit?.output === "number" && raw.limit.output > 0) model.maxTokens = raw.limit.output;
   if (typeof raw.limit?.context === "number" && raw.limit.context > 0) model.contextWindow = raw.limit.context;
-  if (Array.isArray(raw.modalities?.input)) model.input = [...raw.modalities.input];
+  // models.dev may list pdf/audio/video; pi Model.input only allows text|image.
+  const input = sanitizePiInputModalities(raw.modalities?.input);
+  if (input) model.input = input;
   const cost = convertModelsDevCost(raw.cost);
   if (cost) model.cost = cost;
   // Index under both the namespaced map key and the bare/raw id when they differ.
@@ -963,8 +992,17 @@ function applyModelPatch(m: LikeModel, src: LikeModel): string[] {
     m.contextWindow = src.contextWindow;
     patches.push("contextWindow");
   }
-  if (m.input === undefined && src.input) {
-    m.input = [...src.input];
+  // Always coerce existing/source input to pi-safe modalities (strip pdf/audio/video).
+  const srcInput = sanitizePiInputModalities(src.input);
+  const curInput = sanitizePiInputModalities(m.input);
+  if (m.input !== undefined && curInput && JSON.stringify(m.input) !== JSON.stringify(curInput)) {
+    m.input = curInput;
+    patches.push("input");
+  } else if (m.input === undefined && srcInput) {
+    m.input = srcInput;
+    patches.push("input");
+  } else if (m.input !== undefined && !curInput && srcInput) {
+    m.input = srcInput;
     patches.push("input");
   }
   if (m.name === undefined && src.name) {

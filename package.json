@@ -1,6 +1,6 @@
 {
   "name": "@superjeason/pi-model-manager",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Pi commands for managing custom model providers with models.dev-first metadata enrichment.",
   "license": "MIT",
   "keywords": [
