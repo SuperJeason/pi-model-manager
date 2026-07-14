@@ -1,6 +1,6 @@
 # @superjeason/pi-model-manager
 
-Three pi commands for managing custom model providers in `~/.pi/agent/models.json`.
+Three pi commands for managing custom model providers in `~/.pi/agent/models.json`, with models.dev-first metadata enrichment.
 
 ## Commands
 
@@ -13,7 +13,7 @@ Adds a new OpenAI-compatible provider end-to-end:
 3. Fetches `{baseUrl}/models` (standard OpenAI format) with a cancellable loader
 4. Multi-select models (**Space** toggle, **Enter** confirm, **Esc** cancel)
    - If `/models` fetch fails, type model ids manually (comma-separated)
-5. Optionally enrich config from the built-in pi-ai library (same logic as `/sync-model`)
+5. Optionally enrich config from models.dev first, then the built-in pi-ai library (same logic as `/sync-model`)
 6. Writes the provider to `models.json`
 
 Then `/reload` and the new provider appears in `/model`.
@@ -26,7 +26,7 @@ Select a provider (shown with model count and baseUrl), then choose an action:
 - **Manage models**
   - Add from `/models` endpoint, or type ids manually
   - Remove existing models (multi-select + confirm)
-  - Adding can enrich from the built-in library
+  - Adding can enrich from models.dev first, then the built-in library
 - **Edit connection** — change `baseUrl` / `apiKey`  
   (current value in the prompt; empty keeps, `-` removes, Esc cancels)
 - **Enrich model config**
@@ -38,16 +38,14 @@ All destructive ops ask for confirmation first.
 
 ### `/sync-model` — fill missing model config
 
-Reads `models.json`, matches each custom model **by id** against built-in models
-loaded at runtime, and fills fields you didn't set:
+Reads `models.json`, matches each custom model **by id** against models.dev first, then built-in models loaded at runtime, and fills fields you didn't set:
 
-- `thinkingLevelMap` (enables `max` thinking level)
-- `compat` (merged; your values win)
+- `thinkingLevelMap` (from models.dev `reasoning_options` when available; enables `max` / `xhigh` thinking levels)
+- `compat` (from built-in pi metadata; merged, your values win)
 - `maxTokens`, `contextWindow`, `reasoning`, `input`, `name`
 
 Only fills **missing** fields — anything set explicitly is preserved. Idempotent.
-When several built-in providers share an id, picks the one whose
-`thinkingLevelMap` is most complete (prefers `max` support).
+When models.dev has a match, it is used directly. If models.dev is unavailable or has no match, the command falls back to pi's built-in registry. When several matches share an id, the most complete metadata wins (prefers richer `thinkingLevelMap`).
 
 ```
 /sync-model            # fill missing fields, write back
@@ -56,10 +54,7 @@ When several built-in providers share an id, picks the one whose
 
 ## Why
 
-Custom providers don't inherit the authoritative model metadata that built-in pi-ai
-models carry. Without `thinkingLevelMap`, the `max` / `xhigh` thinking levels are
-unavailable (clamped to `high`). Without `compat`, reasoning parameters may not be
-sent correctly. These commands fill that in by matching model ids.
+Custom providers don't inherit authoritative model metadata. models.dev exposes model limits (`context`, `output`), modalities, `reasoning`, and provider-level `reasoning_options`; pi's built-in registry can also provide `compat` details. Without `thinkingLevelMap`, the `max` / `xhigh` thinking levels may be unavailable or clamped. These commands fill that in by matching model ids.
 
 ## Install
 
@@ -105,6 +100,8 @@ In non-TUI modes (RPC/print), falls back to one-by-one Add/Skip prompts.
 - `models.json` must be pure JSON (no `//` comments).
 - Overwriting an existing provider prompts for confirmation; other providers untouched.
 - Enrich only adds missing fields; manual edits are never clobbered (unless you choose overwrite).
+- Metadata source order: models.dev `models.json` + `api.json` first, then pi built-in registry.
+- models.dev responses are cached under `~/.cache/pi-model-manager/` for 7 days; stale cache is used if refresh fails.
 - Uses pi theme tokens for multi-select colors and focus state (`selectedBg`, `accent`, `success`, `dim`, `muted`, `warning`).
 - Focused rows use a full-width `selectedBg` band plus an accent bar (`▌`); checked rows use `[x]` without stealing focus.
 - Runtime deps: Node built-ins only; peer: `@earendil-works/pi-coding-agent` (provides `pi-tui`).
