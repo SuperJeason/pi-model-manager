@@ -16,12 +16,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
+  clearEnrichableFields,
   createEnrichContext,
   enrichModel,
   type EnrichContext,
   type EnrichSource,
   type LikeModel,
   type ModelsJsonConfig,
+  type ProviderConfig,
 } from "./enrich.js";
 import { MultiSelect, type MultiSelectItem, type MultiSelectTheme } from "./multi-select.js";
 
@@ -31,6 +33,8 @@ const SYNC_MODEL_ARGUMENTS: AutocompleteItem[] = [
   { value: "preview", label: "preview", description: "Show what would change without writing models.json" },
   { value: "dry-run", label: "dry-run", description: "Alias for preview" },
   { value: "dryrun", label: "dryrun", description: "Alias for preview" },
+  { value: "force", label: "force", description: "Clear enrichable fields, then re-match (rewrites thinkingLevelMap etc.)" },
+  { value: "force preview", label: "force preview", description: "Preview force re-enrich without writing" },
 ];
 
 function completeSyncModelArgs(prefix: string): AutocompleteItem[] | null {
@@ -226,15 +230,20 @@ function sourceRef(src: EnrichSource): string {
 /** Enrich every model under a provider; return report lines + counters. */
 function enrichProvider(
   provName: string,
-  provCfg: ModelsJsonConfig["providers"][string],
+  provCfg: ProviderConfig,
   enrichCtx: EnrichContext,
+  opts?: { force?: boolean },
 ): { report: string[]; changed: number; matched: number; noMatch: number } {
   const report: string[] = [];
   let changed = 0, matched = 0, noMatch = 0;
   const models = provCfg.models;
   if (!Array.isArray(models)) return { report, changed, matched, noMatch };
   for (const m of models) {
-    const [patches, src] = enrichModel(m, enrichCtx);
+    if (opts?.force) clearEnrichableFields(m);
+    const [patches, src] = enrichModel(m, enrichCtx, {
+      providerName: provName,
+      providerCfg: provCfg,
+    });
     if (!src) {
       noMatch++;
       report.push(`· ${provName}/${m.id} — no models.dev or built-in match, skipped`);
@@ -336,7 +345,7 @@ export default function (pi: ExtensionAPI) {
       // 5. Optional enrich
       const doEnrich = await ui.confirm(
         "Enrich model config?",
-        "Use models.dev when available, then fall back to the built-in library. Fills thinkingLevelMap / contextWindow / maxTokens / input. Existing fields are never overwritten.",
+        "Use models.dev when available, then fall back to the built-in library. Fills thinkingLevelMap / cost / contextWindow / maxTokens / input. Existing non-zero fields are never overwritten.",
       );
 
       // 6. Build provider config
@@ -355,7 +364,10 @@ export default function (pi: ExtensionAPI) {
         const enrichCtx = await createEnrichContext(ctx, customNames);
         let enriched = 0;
         for (const m of providerCfg.models!) {
-          const [patches, src] = enrichModel(m, enrichCtx);
+          const [patches, src] = enrichModel(m, enrichCtx, {
+            providerName: name,
+            providerCfg,
+          });
           if (src && patches.length > 0) {
             enriched++;
             report.push(`✓ ${m.id} ← ${sourceRef(src)}  +${patches.join(",")}`);
@@ -365,7 +377,7 @@ export default function (pi: ExtensionAPI) {
             report.push(`· ${m.id} — no models.dev or built-in match, id only`);
           }
         }
-        report.unshift(`Enriched ${enriched}/${selected.length} models (models.dev first)`);
+        report.unshift(`Enriched ${enriched}/${selected.length} models (models.dev first, canonical family preferred)`);
       }
 
       // 8. Write
@@ -389,14 +401,16 @@ export default function (pi: ExtensionAPI) {
 
   // ===================== /sync-model =====================
   pi.registerCommand("sync-model", {
-    description: "Use models.dev first, then built-in models, to fill missing thinkingLevelMap / context / maxTokens, etc.",
+    description: "Use models.dev first (canonical family preferred), then built-in models, to fill missing thinkingLevelMap / context / maxTokens, etc. Use 'force' to rewrite.",
     getArgumentCompletions: completeSyncModelArgs,
     handler: async (args: string, ctx) => {
       const path = MODELS_JSON();
       const ui = ctx.ui;
       if (!existsSync(path)) { ui.notify("models.json not found: " + path, "error"); return; }
 
-      const dryRun = /\b(preview|dry-run|dryrun)\b/i.test(args ?? "");
+      const rawArgs = args ?? "";
+      const dryRun = /\b(preview|dry-run|dryrun)\b/i.test(rawArgs);
+      const force = /\bforce\b/i.test(rawArgs);
       let config: ModelsJsonConfig;
       try { config = loadConfig(path); }
       catch (e) {
@@ -407,13 +421,21 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (force && !dryRun) {
+        const ok = await ui.confirm(
+          "Force re-enrich all custom models?",
+          "Clears thinkingLevelMap / cost / compat / maxTokens / contextWindow / input / name on every model, then re-matches models.dev (canonical family preferred) and built-in. reasoning and modelFamily are kept.",
+        );
+        if (!ok) { ui.notify("Cancelled.", "info"); return; }
+      }
+
       const customNames = new Set(Object.keys(config.providers));
       const enrichCtx = await createEnrichContext(ctx, customNames);
 
       const all: ReturnType<typeof enrichProvider>[] = [];
       let changed = 0, matched = 0, noMatch = 0;
       for (const [provName, provCfg] of Object.entries(config.providers)) {
-        const r = enrichProvider(provName, provCfg, enrichCtx);
+        const r = enrichProvider(provName, provCfg, enrichCtx, { force });
         all.push(r);
         changed += r.changed; matched += r.matched; noMatch += r.noMatch;
       }
@@ -421,8 +443,12 @@ export default function (pi: ExtensionAPI) {
       if (changed > 0 && !dryRun) saveConfig(path, config);
 
       const report = all.flatMap((r) => r.report);
+      const modeTag = [
+        dryRun ? "preview · not written" : "",
+        force ? "force" : "",
+      ].filter(Boolean).join(" · ");
       const head =
-        `${dryRun ? "[preview · not written] " : ""}/sync-model: matched ${matched} · enriched ${changed} · no match ${noMatch} · source models.dev→built-in` +
+        `${modeTag ? `[${modeTag}] ` : ""}/sync-model: matched ${matched} · enriched ${changed} · no match ${noMatch} · source models.dev(canonical)→built-in` +
         (changed > 0 && !dryRun ? `\nWrote models.json. ${formatReloadHint()}` : "");
       ui.notify([head, "", ...report].join("\n"), changed > 0 || dryRun ? "info" : "warning");
     },
@@ -560,7 +586,7 @@ export default function (pi: ExtensionAPI) {
 
           const doEnrich = await ui.confirm(
             "Enrich model config?",
-            "Use models.dev when available, then fall back to the built-in library. Fills thinkingLevelMap / contextWindow / maxTokens / input."
+            "Use models.dev when available (canonical family preferred), then fall back to the built-in library. Fills thinkingLevelMap / cost / contextWindow / maxTokens / input."
           );
           const customNames = new Set(Object.keys(config.providers));
           const enrichCtx = doEnrich ? await createEnrichContext(ctx, customNames) : undefined;
@@ -568,7 +594,10 @@ export default function (pi: ExtensionAPI) {
           for (const id of selected) {
             const m: LikeModel = { id };
             if (doEnrich && enrichCtx) {
-              const [patches, src] = enrichModel(m, enrichCtx);
+              const [patches, src] = enrichModel(m, enrichCtx, {
+                providerName: provName,
+                providerCfg: provCfg,
+              });
               if (src && patches.length > 0) {
                 report.push(`✓ ${id} ← ${sourceRef(src)} +${patches.join(",")}`);
               } else if (src) {
@@ -641,7 +670,7 @@ export default function (pi: ExtensionAPI) {
         if (overwrite) {
           const ok = await ui.confirm(
             "Overwrite and re-enrich?",
-            "Clears thinkingLevelMap / compat / maxTokens / contextWindow / input / name on each model, then re-matches models.dev first and built-in second. reasoning is kept."
+            "Clears thinkingLevelMap / cost / compat / maxTokens / contextWindow / input / name on each model, then re-matches models.dev (canonical family preferred) and built-in. reasoning and modelFamily are kept."
           );
           if (!ok) { ui.notify("Cancelled.", "info"); return; }
         }
@@ -649,11 +678,11 @@ export default function (pi: ExtensionAPI) {
         const enrichCtx = await createEnrichContext(ctx, customNames);
         let changed = 0, noMatch = 0;
         for (const m of models) {
-          if (overwrite) {
-            delete m.thinkingLevelMap; delete m.compat; delete m.maxTokens;
-            delete m.contextWindow; delete m.input; delete m.name;
-          }
-          const [patches, src] = enrichModel(m, enrichCtx);
+          if (overwrite) clearEnrichableFields(m);
+          const [patches, src] = enrichModel(m, enrichCtx, {
+            providerName: provName,
+            providerCfg: provCfg,
+          });
           if (!src) {
             noMatch++;
             report.push(`· ${m.id} — no models.dev or built-in match, skipped`);

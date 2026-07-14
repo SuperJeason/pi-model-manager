@@ -41,18 +41,51 @@ All destructive ops ask for confirmation first.
 Reads `models.json`, matches each custom model **by id** against models.dev first, then built-in models loaded at runtime, and fills fields you didn't set:
 
 - `thinkingLevelMap` (from models.dev `reasoning_options` when available; enables `max` / `xhigh` thinking levels)
+- `cost` (from models.dev `api.json` pricing → pi `{input,output,cacheRead,cacheWrite[,tiers]}` USD/1M; fills missing or all-zero placeholders)
 - `compat` (from built-in pi metadata; merged, your values win)
 - `maxTokens`, `contextWindow`, `reasoning`, `input`, `name`
 
 Only fills **missing** fields — anything set explicitly is preserved. Idempotent.
-When models.dev has a match, it is used directly. If models.dev is unavailable or has no match, the command falls back to pi's built-in registry. When several matches share an id, the most complete metadata wins (prefers richer `thinkingLevelMap`).
+
+Matching prefers **canonical families** over reseller/gateway clones:
+
+| bare id example | preferred family |
+|---|---|
+| `gpt-5.5` / `o3` | `openai` |
+| `claude-*` | `anthropic` |
+| `gemini-*` | `google` |
+| `grok-*` | `xai` |
+| `glm-*` | `zhipuai` / `zai` |
+| `qwen*` / `qwq*` / `qvq*` | `alibaba` / `qwen` / `dashscope` |
+| `doubao*` / `seed-1.*` | `volcengine` / `bytedance` |
+| `mimo-*` / `xiaomi-mimo*` | `xiaomi` |
+| `minimax*` / `abab*` | `minimax` |
+| `kimi*` / `moonshot*` | `moonshotai` |
+
+You can also set an explicit family on the provider or model:
+
+```json
+{
+  "providers": {
+    "cpa": {
+      "modelFamily": "openai",
+      "models": [
+        { "id": "gpt-5.5", "modelFamily": "openai" }
+      ]
+    }
+  }
+}
+```
 
 ```
-/sync-model            # fill missing fields, write back
-/sync-model preview    # show what would change without writing
+/sync-model              # fill missing fields, write back
+/sync-model preview      # show what would change without writing
+/sync-model force        # clear enrichable fields, then re-match (rewrites maps)
+/sync-model force preview
 ```
 
-Tab completion is available for the `preview` / `dry-run` arguments.
+Tab completion is available for `preview` / `dry-run` / `force`.
+Use `force` when an older sparse/wrong `thinkingLevelMap` is stuck (safe mode never overwrites existing fields).
 
 ## Why
 
@@ -101,8 +134,12 @@ In non-TUI modes (RPC/print), falls back to one-by-one Add/Skip prompts.
   `bedrock-converse-stream`.
 - `models.json` must be pure JSON (no `//` comments).
 - Overwriting an existing provider prompts for confirmation; other providers untouched.
-- Enrich only adds missing fields; manual edits are never clobbered (unless you choose overwrite).
-- Metadata source order: models.dev `models.json` + `api.json` first, then pi built-in registry.
+- Enrich only adds missing fields; manual edits are never clobbered (unless you choose overwrite / `/sync-model force`).
+- Metadata source order: models.dev `models.json` + `api.json` first (canonical family preferred), then pi built-in registry.
+- Bare ids like `gpt-5.5` prefer `openai/gpt-5.5` over reseller copies (`vivgrid`, `302ai`, …).
+- Optional `modelFamily` on provider or model overrides family inference.
+- `cost` is filled when missing or all zeros (common custom-provider placeholders); non-zero user costs are kept.
+- models.dev `models.json` has limits/modalities; pricing usually comes from `api.json` and is merged in.
 - models.dev responses are cached under `~/.cache/pi-model-manager/` for 7 days; stale cache is used if refresh fails.
 - Uses pi theme tokens for multi-select colors and focus state (`selectedBg`, `accent`, `success`, `dim`, `muted`, `warning`).
 - Focused rows use a full-width `selectedBg` band plus an accent bar (`▌`); checked rows use `[x]` without stealing focus.
