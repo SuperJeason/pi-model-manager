@@ -1,0 +1,38 @@
+{
+  "name": "@superjeason/pi-model-manager",
+  "version": "0.2.4",
+  "description": "Pi commands for managing custom model providers: add providers, edit models, and sync built-in model metadata.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SuperJeason/pi-model-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SuperJeason/pi-model-manager/issues"
+  },
+  "homepage": "https://github.com/SuperJeason/pi-model-manager#readme",
+  "files": [
+    "index.ts",
+    "enrich.ts",
+    "multi-select.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  }
+}

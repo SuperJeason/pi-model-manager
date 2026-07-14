@@ -1,0 +1,121 @@
+# @superjeason/pi-model-manager
+
+Three pi commands for managing custom model providers in `~/.pi/agent/models.json`.
+
+## Commands
+
+### `/add-provider` — interactive wizard
+
+Adds a new OpenAI-compatible provider end-to-end:
+
+1. Enter **provider name**, **base URL**, **API key**
+2. Choose **API type** (all built-in pi formats)
+3. Fetches `{baseUrl}/models` (standard OpenAI format) with a cancellable loader
+4. Multi-select models (**Space** toggle, **Enter** confirm, **Esc** cancel)
+   - If `/models` fetch fails, type model ids manually (comma-separated)
+5. Optionally enrich config from the built-in pi-ai library (same logic as `/sync-model`)
+6. Writes the provider to `models.json`
+
+Then `/reload` and the new provider appears in `/model`.
+
+### `/edit-provider` — modify an existing provider
+
+Select a provider (shown with model count and baseUrl), then choose an action:
+
+- **Change API format** — pick from built-in API types
+- **Manage models**
+  - Add from `/models` endpoint, or type ids manually
+  - Remove existing models (multi-select + confirm)
+  - Adding can enrich from the built-in library
+- **Edit connection** — change `baseUrl` / `apiKey`  
+  (current value in the prompt; empty keeps, `-` removes, Esc cancels)
+- **Enrich model config**
+  - Safe: fill **missing** fields only
+  - Overwrite: clear matched fields then re-fill (`reasoning` is preserved)
+- **Delete provider** — remove provider and all models (confirm)
+
+All destructive ops ask for confirmation first.
+
+### `/sync-model` — fill missing model config
+
+Reads `models.json`, matches each custom model **by id** against built-in models
+loaded at runtime, and fills fields you didn't set:
+
+- `thinkingLevelMap` (enables `max` thinking level)
+- `compat` (merged; your values win)
+- `maxTokens`, `contextWindow`, `reasoning`, `input`, `name`
+
+Only fills **missing** fields — anything set explicitly is preserved. Idempotent.
+When several built-in providers share an id, picks the one whose
+`thinkingLevelMap` is most complete (prefers `max` support).
+
+```
+/sync-model            # fill missing fields, write back
+/sync-model preview    # show what would change without writing
+```
+
+## Why
+
+Custom providers don't inherit the authoritative model metadata that built-in pi-ai
+models carry. Without `thinkingLevelMap`, the `max` / `xhigh` thinking levels are
+unavailable (clamped to `high`). Without `compat`, reasoning parameters may not be
+sent correctly. These commands fill that in by matching model ids.
+
+## Install
+
+```bash
+pi install git:github.com/superjeason/pi-model-manager
+# or
+pi install npm:@superjeason/pi-model-manager
+# or local path
+pi install ./pi-model-manager
+```
+
+Then `/reload`.
+
+## Multi-select controls
+
+| Key | Action |
+|-----|--------|
+| Space | Toggle current item |
+| ↑ / ↓ | Move cursor |
+| PageUp / PageDown | Page |
+| Home / End | First / last |
+| Enter | Confirm selection |
+| Esc / Ctrl+C | Cancel (uses pi's `tui.select.cancel` plus low-level `matchesKey("escape")`; returns without changes) |
+| type | Filter list (Unicode supported) |
+| Backspace | Clear filter char |
+| Ctrl+A | Select all **visible** (uses low-level `matchesKey("ctrl+a")`) |
+| Ctrl+D | Deselect all (uses low-level `matchesKey("ctrl+d")`) |
+
+Selection is tracked by model id, so filtering does not scramble checks.
+In non-TUI modes (RPC/print), falls back to one-by-one Add/Skip prompts.
+**Cancel is never treated as "fall back to one-by-one".**
+
+## Requirements & Notes
+
+- `/add-provider` prefers a standard OpenAI-compatible `/models` endpoint  
+  (`GET {baseUrl}/models` → `{"data":[{"id":"..."}]}`).  
+  `baseUrl` with or without trailing `/v1` both work.  
+  If the endpoint is missing (e.g. anthropic-messages / google-generative-ai), type ids manually.
+- Supports all built-in pi API formats: `openai-completions`, `openai-responses`,
+  `anthropic-messages`, `google-generative-ai`, `google-vertex`,
+  `mistral-conversations`, `openai-codex-responses`, `azure-openai-responses`,
+  `bedrock-converse-stream`.
+- `models.json` must be pure JSON (no `//` comments).
+- Overwriting an existing provider prompts for confirmation; other providers untouched.
+- Enrich only adds missing fields; manual edits are never clobbered (unless you choose overwrite).
+- Uses pi theme tokens for multi-select colors and focus state (`selectedBg`, `accent`, `success`, `dim`, `muted`, `warning`).
+- Focused rows use a full-width `selectedBg` band plus an accent bar (`▌`); checked rows use `[x]` without stealing focus.
+- Runtime deps: Node built-ins only; peer: `@earendil-works/pi-coding-agent` (provides `pi-tui`).
+
+## Structure
+
+```
+pi-model-manager/
+├── index.ts         # /add-provider + /edit-provider + /sync-model
+├── enrich.ts        # shared model-matching & config-filling
+├── multi-select.ts  # themed multi-select TUI component
+├── package.json
+└── README.md
+```
