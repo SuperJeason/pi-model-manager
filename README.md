@@ -52,6 +52,8 @@ When models.dev has a match, it is used directly. If models.dev is unavailable o
 /sync-model preview    # show what would change without writing
 ```
 
+Tab completion is available for the `preview` / `dry-run` arguments.
+
 ## Why
 
 Custom providers don't inherit authoritative model metadata. models.dev exposes model limits (`context`, `output`), modalities, `reasoning`, and provider-level `reasoning_options`; pi's built-in registry can also provide `compat` details. Without `thinkingLevelMap`, the `max` / `xhigh` thinking levels may be unavailable or clamped. These commands fill that in by matching model ids.

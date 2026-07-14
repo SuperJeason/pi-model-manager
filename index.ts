@@ -11,7 +11,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, BorderedLoader } from "@earendil-works/pi-coding-agent";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -26,6 +26,19 @@ import {
 import { MultiSelect, type MultiSelectItem, type MultiSelectTheme } from "./multi-select.js";
 
 const MODELS_JSON = () => join(homedir(), ".pi", "agent", "models.json");
+
+const SYNC_MODEL_ARGUMENTS: AutocompleteItem[] = [
+  { value: "preview", label: "preview", description: "Show what would change without writing models.json" },
+  { value: "dry-run", label: "dry-run", description: "Alias for preview" },
+  { value: "dryrun", label: "dryrun", description: "Alias for preview" },
+];
+
+function completeSyncModelArgs(prefix: string): AutocompleteItem[] | null {
+  const p = prefix.trimStart().toLowerCase();
+  if (p.includes(" ")) return null;
+  const filtered = SYNC_MODEL_ARGUMENTS.filter((item) => item.value.startsWith(p));
+  return filtered.length > 0 ? filtered : null;
+}
 
 /**
  * Multi-select dialog (TUI).
@@ -377,6 +390,7 @@ export default function (pi: ExtensionAPI) {
   // ===================== /sync-model =====================
   pi.registerCommand("sync-model", {
     description: "Use models.dev first, then built-in models, to fill missing thinkingLevelMap / context / maxTokens, etc.",
+    getArgumentCompletions: completeSyncModelArgs,
     handler: async (args: string, ctx) => {
       const path = MODELS_JSON();
       const ui = ctx.ui;
