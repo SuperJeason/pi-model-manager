@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   id-token: write # OIDC — required for npm trusted publishing (no token needed)
@@ -14,9 +15,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # Do NOT pass `registry-url` here: setup-node would write
+      # `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into .npmrc and
+      # export a dummy NODE_AUTH_TOKEN. npm then believes classic auth is
+      # configured, never starts the OIDC exchange, and `npm publish` dies with
+      # `404 Not Found - PUT ...`. npm defaults to registry.npmjs.org anyway.
+      # Refs: https://docs.npmjs.com/trusted-publishers
+      #       https://github.com/npm/documentation/issues/1960
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          echo "tag=$tag package.json=$pkg"
+          [ "$tag" = "$pkg" ] || {
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}"
+            exit 1
+          }
+
       - run: npm install
       - run: npm publish
