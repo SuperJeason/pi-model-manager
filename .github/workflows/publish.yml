@@ -39,4 +39,7 @@ jobs:
           }
 
       - run: npm install
-      - run: npm publish
+      # `--loglevel verbose` surfaces npm's otherwise-silent OIDC failures
+      # (lib/utils/oidc.js only log.verbose()s them), e.g. a missing trusted
+      # publisher or a rejected token exchange.
+      - run: npm publish --loglevel verbose
