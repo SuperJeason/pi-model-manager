@@ -7,7 +7,12 @@
  *   checked only          → green [x], normal label
  *   idle                  → dim [ ], normal label
  */
-import { matchesKey, type Component } from "@earendil-works/pi-tui";
+import {
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  type Component,
+} from "@earendil-works/pi-tui";
 
 export interface MultiSelectItem {
   value: string;
@@ -60,29 +65,13 @@ const CTRL_A = "\u0001";
 const CTRL_D = "\u0004";
 const CTRL_C = "\u0003";
 
-/** Rough terminal column width (CJK = 2). */
-function visualWidth(s: string): number {
-  let w = 0;
-  for (const ch of s) {
-    const cp = ch.codePointAt(0)!;
-    if (
-      (cp >= 0x1100 && cp <= 0x115f) ||
-      cp === 0x2329 || cp === 0x232a ||
-      (cp >= 0x2e80 && cp <= 0xa4cf) ||
-      (cp >= 0xac00 && cp <= 0xd7a3) ||
-      (cp >= 0xf900 && cp <= 0xfaff) ||
-      (cp >= 0xfe10 && cp <= 0xfe19) ||
-      (cp >= 0xfe30 && cp <= 0xfe6f) ||
-      (cp >= 0xff00 && cp <= 0xff60) ||
-      (cp >= 0xffe0 && cp <= 0xffe6) ||
-      (cp >= 0x20000 && cp <= 0x3fffd)
-    ) {
-      w += 2;
-    } else if (cp >= 0x20 || cp === 0x09) {
-      w += 1;
-    }
-  }
-  return w;
+/** Single-column ellipsis: costs 1 column instead of "..."'s 3. */
+const ELLIPSIS = "\u2026";
+
+/** Pad with spaces to an exact column count (no shrink); guarded for width <= 0. */
+function padToWidth(s: string, width: number): string {
+  if (width <= 0) return "";
+  return s + " ".repeat(Math.max(0, width - visibleWidth(s)));
 }
 
 export interface MultiSelectOptions {
@@ -154,30 +143,32 @@ export class MultiSelect implements Component {
     const boxPlain = isSel ? "[x]" : "[ ]";
     const labelPlain = it.label;
     const descPlain = it.description ? `  ${it.description}` : "";
-    const plainCore = `${gutterPlain}${boxPlain} ${labelPlain}${descPlain}`;
-    const pad = " ".repeat(Math.max(0, width - visualWidth(plainCore)));
 
     if (isCur) {
-      // Focused: accent bar + checkbox + bold label, then full-row bg
-      const gutter = th.accent("▌ ");
-      const box = isSel ? th.success("[x]") : th.dim("[ ]");
-      const label = th.bold(th.rowText(labelPlain));
+      // Focused: accent bar + checkbox + bold label, then full-row bg.
+      // Clip the styled line, then pad: `truncateToWidth` is ANSI-aware and
+      // closes styles, so the bg band is exactly `width` wide and can never
+      // overflow (pi 1.1.0 aborts the process on any over-wide line).
+      const gutter = th.accent(gutterPlain);
+      const box = isSel ? th.success(boxPlain) : th.dim(boxPlain);
+      const label = th.bold(th.rowText(it.label));
       const desc = descPlain ? th.muted(descPlain) : "";
+      const styled = truncateToWidth(`${gutter}${box} ${label}${desc}`, width, ELLIPSIS);
       // Official pattern: build styled line, THEN apply bg to the whole thing
-      return th.row(`${gutter}${box} ${label}${desc}${pad}`);
+      return th.row(padToWidth(styled, width));
     }
 
     // Unfocused checked: only the box is green — keeps focus row dominant
     if (isSel) {
-      const box = th.success("[x]");
+      const box = th.success(boxPlain);
       const desc = descPlain ? th.muted(descPlain) : "";
-      return `  ${box} ${labelPlain}${desc}`;
+      return truncateToWidth(`  ${box} ${labelPlain}${desc}`, width, ELLIPSIS);
     }
 
     // Idle
-    const box = th.dim("[ ]");
+    const box = th.dim(boxPlain);
     const desc = descPlain ? th.muted(descPlain) : "";
-    return `  ${box} ${labelPlain}${desc}`;
+    return truncateToWidth(`  ${box} ${labelPlain}${desc}`, width, ELLIPSIS);
   }
 
   render(width: number): string[] {
@@ -185,7 +176,10 @@ export class MultiSelect implements Component {
     const lines: string[] = [];
     const total = this.filtered.length;
     const selCount = this.selected.size;
-    const rowWidth = Math.max(24, width > 0 ? width : 80);
+    // Never widen past the terminal: pi aborts on any rendered line wider than
+    // the terminal, so the old `Math.max(24, width)` floor was a latent crash
+    // on narrow terminals.
+    const rowWidth = width > 0 ? width : 80;
 
     lines.push(th.title(` ${this.title}`));
 
@@ -204,7 +198,7 @@ export class MultiSelect implements Component {
       lines.push(th.warning("  (no matches)"));
       lines.push("");
       lines.push(th.dim("  Backspace clears filter · Esc cancels"));
-      return lines;
+      return lines.map((line) => truncateToWidth(line, rowWidth, ELLIPSIS));
     }
 
     if (this.cursor < this.topOffset) this.topOffset = this.cursor;
@@ -230,7 +224,9 @@ export class MultiSelect implements Component {
     lines.push(
       th.dim("  Space toggle · Enter confirm · Esc cancel · type filter · Ctrl+A all · Ctrl+D none"),
     );
-    return lines;
+    // Safety net: every line stays within the terminal (title / status / filter
+    // text / long entries included).
+    return lines.map((line) => truncateToWidth(line, rowWidth, ELLIPSIS));
   }
 
   private applyFilter() {
